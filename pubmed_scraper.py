@@ -16,7 +16,7 @@ def chunked_search_pubmed(query, start_year=1900, end_year=2025):
     all_pmids = []
 
     for year in range(start_year, end_year + 1):
-        print(f"🔎 Searching year {year} ...")
+        print(f"Searching year {year} ...")
         year_pmids = []
         retstart = 0
         batch_size = 100
@@ -134,7 +134,7 @@ def scrape_pubmed(keyword, sample_size=200, start_year=1900, end_year=2025):
     df = pd.DataFrame(articles)
     csv_filename = "pubmed_results.csv"
     df.to_csv(csv_filename, index=False)
-    print(f"✅ Results saved to {csv_filename}")
+    print(f"Results saved to {csv_filename}")
 
     # Optional: open automatically (Mac)
     os.system(f"open {csv_filename}")
