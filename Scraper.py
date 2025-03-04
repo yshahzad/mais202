@@ -143,5 +143,5 @@ def scrape_pubmed(keyword, sample_size=200, start_year=1900, end_year=2025):
 
 # Example usage
 if __name__ == "__main__":
-    keyword = "machine learning"
-    scrape_pubmed(keyword, sample_size=200, start_year=1980, end_year=2025)
+    keyword = "Combinatorics"
+    scrape_pubmed(keyword, sample_size=20000, start_year=1980, end_year=2025)
