@@ -1,71 +1,90 @@
 import requests
 import xml.etree.ElementTree as ET
 import pandas as pd
-import time  # Prevents API rate limiting
+import random
+import time
+import os
 
-# Base URLs for PubMed API (e-utilities)
 SEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 FETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 
-def search_pubmed(query, max_results=10000):
-    """Searches PubMed and returns a list of PMIDs, handling pagination properly."""
-    pmids = []
-    batch_size = 100  # PubMed allows up to 100 results per request
-    retstart = 0  # Offset for pagination
+def chunked_search_pubmed(query, start_year=1900, end_year=2025):
+    """
+    Retrieves ALL PubMed PMIDs by splitting the query year-by-year,
+    circumventing the 10k limit for large queries.
+    """
+    all_pmids = []
 
-    while len(pmids) < max_results:
-        remaining = max_results - len(pmids)
-        retmax = min(batch_size, remaining)  # Fetch up to batch_size but no more than needed
+    for year in range(start_year, end_year + 1):
+        print(f"🔎 Searching year {year} ...")
+        year_pmids = []
+        retstart = 0
+        batch_size = 100
 
-        params = {
-            "db": "pubmed",
-            "term": query,
-            "retmode": "xml",
-            "retmax": retmax,  # Number of results per batch
-            "retstart": retstart  # Start index for pagination
-        }
+        while True:
+            # Query includes year range: e.g. "machine learning AND 1999[PDAT]"
+            term_str = f"{query} AND {year}[PDAT]"
 
-        response = requests.get(SEARCH_URL, params=params)
-        root = ET.fromstring(response.text)
+            params = {
+                "db": "pubmed",
+                "term": term_str,
+                "retmode": "xml",
+                "retmax": batch_size,
+                "retstart": retstart
+            }
 
-        # Extract PMIDs
-        batch_pmids = [id_tag.text for id_tag in root.findall(".//Id")]
-        if not batch_pmids:
-            break  # No more results to fetch
+            response = requests.get(SEARCH_URL, params=params)
+            root = ET.fromstring(response.text)
 
-        pmids.extend(batch_pmids)
-        retstart += retmax  # Move to next batch
+            # Extract PMIDs from this batch
+            batch_pmids = [id_tag.text for id_tag in root.findall(".//Id")]
+            if not batch_pmids:
+                break  # No more results for this year
 
-        time.sleep(0.5)  # Prevent API rate limits
+            year_pmids.extend(batch_pmids)
+            retstart += batch_size
+            time.sleep(0.4)  # Prevent rate-limiting
 
-    return pmids[:max_results]
+            # If we exceed 10k for a single year, we stop retrieving more for that year
+            # (PubMed won't return beyond 10k in eSearch)
+            if len(year_pmids) >= 10000:
+                print(f"⚠️ Reached 10k limit for year {year}. Moving on...")
+                break
+
+        print(f"   Found {len(year_pmids)} PMIDs for {year}.")
+        all_pmids.extend(year_pmids)
+
+    print(f"✅ Total combined PMIDs (all years): {len(all_pmids)}")
+    return all_pmids
 
 def fetch_titles_dates_authors(pmids):
-    """Fetches article details and retains all results, even if abstracts are missing."""
-    if not pmids:
-        return []
-
+    """
+    Fetches article details (Title, Date, Authors, Abstract) for each PMID.
+    """
     results = []
-    batch_size = 100  # PubMed allows fetching up to 100 articles at once
+    batch_size = 100
 
     for i in range(0, len(pmids), batch_size):
-        batch_pmids = pmids[i:i+batch_size]  # Process in batches of 100
-        params = {"db": "pubmed", "id": ",".join(batch_pmids), "retmode": "xml"}
+        batch_pmids = pmids[i:i + batch_size]
+        params = {
+            "db": "pubmed",
+            "id": ",".join(batch_pmids),
+            "retmode": "xml"
+        }
         response = requests.get(FETCH_URL, params=params)
         root = ET.fromstring(response.text)
 
-        # Loop through all articles in the XML
         for article in root.findall(".//PubmedArticle"):
-            title = article.find(".//ArticleTitle")
-            title = title.text if title is not None else "N/A"
+            title_tag = article.find(".//ArticleTitle")
+            title = title_tag.text if title_tag is not None else "N/A"
 
-            # Extract publication date (Year, Month, Day if available)
+            # Extract publication date
             pub_date_tag = article.find(".//PubDate")
             if pub_date_tag is not None:
-                year = pub_date_tag.find("Year").text if pub_date_tag.find("Year") is not None else "Unknown"
-                month = pub_date_tag.find("Month").text if pub_date_tag.find("Month") is not None else ""
-                day = pub_date_tag.find("Day").text if pub_date_tag.find("Day") is not None else ""
-                pub_date = f"{year}-{month}-{day}".strip("-")  # Format as YYYY-MM-DD
+                year = pub_date_tag.find("Year")
+                month = pub_date_tag.find("Month")
+                day = pub_date_tag.find("Day")
+                pub_date = f"{year.text if year is not None else 'Unknown'}-{month.text if month is not None else ''}-{day.text if day is not None else ''}".strip("-")
             else:
                 pub_date = "Unknown"
 
@@ -79,11 +98,10 @@ def fetch_titles_dates_authors(pmids):
 
             author_list = ", ".join(authors) if authors else "No authors listed"
 
-            # Extract abstract (if available)
+            # Extract abstract
             abstract_tag = article.find(".//AbstractText")
             abstract_text = abstract_tag.text if abstract_tag is not None else "No abstract available"
 
-            # Add the article to results, even if it doesn't have an abstract
             results.append({
                 "Title": title,
                 "Date": pub_date,
@@ -91,25 +109,39 @@ def fetch_titles_dates_authors(pmids):
                 "Abstract": abstract_text
             })
 
-        time.sleep(0.5)  # Prevent API rate limits
+        time.sleep(0.4)  # Rate limit safety
 
     return results
 
-def scrape_pubmed(keyword, max_results=10000):
-    """Finds articles and returns a DataFrame (including articles without abstracts)."""
-    pmids = search_pubmed(keyword, max_results)  # Fetch PMIDs using PubMed API
-    print(f"Total PMIDs Retrieved: {len(pmids)}")  # Debugging step
-    articles = fetch_titles_dates_authors(pmids)  # Retrieve all article details
-    return pd.DataFrame(articles)
+def scrape_pubmed(keyword, sample_size=200, start_year=1900, end_year=2025):
+    """
+    1) Retrieve PMIDs year-by-year to avoid the 10k limit.
+    2) Shuffle & sample 200 PMIDs from across all years.
+    3) Fetch metadata and save to CSV.
+    """
+    # 1) Get all PMIDs from each year chunk
+    all_pmids = chunked_search_pubmed(keyword, start_year, end_year)
+
+    # 2) Shuffle & pick a random sample
+    random.shuffle(all_pmids)
+    selected_pmids = all_pmids[:sample_size]
+    print(f"🔀 Selected {len(selected_pmids)} random PMIDs across {len(all_pmids)} total.")
+
+    # 3) Fetch article details
+    articles = fetch_titles_dates_authors(selected_pmids)
+
+    # 4) Save to CSV
+    df = pd.DataFrame(articles)
+    csv_filename = "pubmed_results.csv"
+    df.to_csv(csv_filename, index=False)
+    print(f"✅ Results saved to {csv_filename}")
+
+    # Optional: open automatically (Mac)
+    os.system(f"open {csv_filename}")
+
+    return csv_filename
 
 # Example usage
-keyword = "machine learning"
-articles_df = scrape_pubmed(keyword, max_results=200)
-
-# Save results to a CSV file
-articles_df.to_csv("pubmed_results.csv", index=False)
-print("Results saved to pubmed_results.csv")
-
-# Optional: Open the file automatically (Mac only)
-import os
-os.system("open pubmed_results.csv")
+if __name__ == "__main__":
+    keyword = "machine learning"
+    scrape_pubmed(keyword, sample_size=200, start_year=1980, end_year=2025)
