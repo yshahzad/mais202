@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from statsmodels.tsa.arima.model import ARIMA
@@ -13,6 +14,8 @@ df["Year"] = pd.to_datetime(df["dates"], errors="coerce").dt.year
 # Group by 'Year' and count the number of publications per year
 df = df.groupby("Year").size().reset_index(name="Publication_Count")
 
+
+
 # Ensure 'Year' is in datetime format and set it as index
 df["Year"] = pd.to_datetime(df["Year"], format="%Y")
 df.set_index("Year", inplace=True)
@@ -25,6 +28,10 @@ plt.ylabel("Number of Publications")
 plt.title("Publication Trends Over Time")
 plt.legend()
 plt.show()
+
+#take the log of each publication count (see special case of Box-Cox transformation)
+# https://otexts.com/fpp2/transformations.html
+df["Publication_Count"] = np.log(df["Publication_Count"])
 
 # Automatically determine the best ARIMA parameters
 best_model = auto_arima(df["Publication_Count"], seasonal=False, trace=True, stepwise=True)
@@ -40,8 +47,14 @@ forecast_years = pd.date_range(start=df.index[-1] + pd.DateOffset(years=1), peri
 forecast = model_fit.forecast(steps=10)
 
 # Convert forecast to DataFrame
-forecast_df = pd.DataFrame({"Year": forecast_years, "Predicted_Publications": forecast.values})
+forecast_df = pd.DataFrame({"Year": forecast_years, "Predicted_Publications": np.exp(forecast.values)}) # convert back the log trasnformation
 forecast_df.set_index("Year", inplace=True)
+
+#Reconvert into the real number of publication count
+df["Publication_Count"] = np.exp(df["Publication_Count"])
+
+
+
 
 # Plot results
 plt.figure(figsize=(10, 5))
