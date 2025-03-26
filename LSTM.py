@@ -1,91 +1,95 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
+import torch
+from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-# Load dataset (replace with actual file path if using CSV)
-file_path = "Accelerated Failure Time_arXiv_scrape.csv"
+# Load and prepare data
+file_path = "Data/Survival Analysis/Survival Analysis_arXiv_scrape.csv"
 df = pd.read_csv(file_path)
+df[df.columns[2]] = pd.to_datetime(df[df.columns[2]])
 
-# Drop any missing values
-df = df.dropna()
+# Group by month and count publications
+monthly_counts = df.groupby(df[df.columns[2]].dt.to_period("M")).size().reset_index(name="count")
+monthly_counts["date"] = monthly_counts[df.columns[2]].dt.to_timestamp()
+monthly_counts = monthly_counts[["date", "count"]].sort_values("date")
 
-# Identify time series columns
-time_column = df.columns[0]  # Assume first column is the time index (year)
-feature_columns = df.columns[1:]  # Other columns are publication counts
+# Normalize
+scaler = MinMaxScaler()
+monthly_counts["count_normalized"] = scaler.fit_transform(monthly_counts[["count"]])
 
-# Convert data to numerical format
-df[time_column] = df[time_column].astype(int)
-df[feature_columns] = df[feature_columns].astype(float)
-
-# Normalize features using MinMaxScaler
-scalers = {col: MinMaxScaler() for col in feature_columns}
-for col in feature_columns:
-    df[col] = scalers[col].fit_transform(df[[col]])
-
-# Convert dataframe to numpy array
-data = df[feature_columns].values
-time_steps = 5  # Lookback window for LSTM
-
-# Function to create sequences for LSTM
-def create_sequences(data, time_steps):
-    sequences, targets = [], []
+# Sequence builder
+def create_sequences(data, time_steps=12):
+    X, y = [], []
     for i in range(len(data) - time_steps):
-        sequences.append(data[i:i + time_steps])
-        targets.append(data[i + time_steps])  # Predict next step
-    return np.array(sequences), np.array(targets)
+        X.append(data[i:i+time_steps])
+        y.append(data[i+time_steps])
+    return np.array(X), np.array(y)
 
-# Create sequences for training
-X, y = create_sequences(data, time_steps)
+values = monthly_counts["count_normalized"].values
+time_steps = 12
+X, y = create_sequences(values, time_steps)
 
-# Convert to PyTorch tensors
-X_tensor = torch.tensor(X, dtype=torch.float32)
-y_tensor = torch.tensor(y, dtype=torch.float32)
-
-# Create DataLoader
-batch_size = 16
+X_tensor = torch.tensor(X, dtype=torch.float32).unsqueeze(-1)
+y_tensor = torch.tensor(y, dtype=torch.float32).unsqueeze(-1)
 dataset = TensorDataset(X_tensor, y_tensor)
-dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+loader = DataLoader(dataset, batch_size=16, shuffle=True)
 
-# Define LSTM model
+# LSTM model
 class LSTMModel(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, output_size):
+    def __init__(self):
         super(LSTMModel, self).__init__()
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, output_size)
-    
+        self.lstm = nn.LSTM(input_size=1, hidden_size=64, num_layers=2, batch_first=True)
+        self.fc = nn.Linear(64, 1)
+
     def forward(self, x):
-        lstm_out, _ = self.lstm(x)
-        return self.fc(lstm_out[:, -1, :])  # Use last time step output
+        out, _ = self.lstm(x)
+        return self.fc(out[:, -1, :])
 
-# Model hyperparameters
-input_size = len(feature_columns)
-hidden_size = 64
-num_layers = 2
-output_size = len(feature_columns)
-
-# Initialize model
-model = LSTMModel(input_size, hidden_size, num_layers, output_size)
+model = LSTMModel()
 criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-# Train the model
-num_epochs = 50
-for epoch in range(num_epochs):
-    for batch_X, batch_y in dataloader:
+# Train
+epochs = 50
+for epoch in range(epochs):
+    for batch_X, batch_y in loader:
         optimizer.zero_grad()
-        predictions = model(batch_X)
-        loss = criterion(predictions, batch_y)
+        output = model(batch_X)
+        loss = criterion(output, batch_y)
         loss.backward()
         optimizer.step()
-    
     if epoch % 10 == 0:
-        print(f"Epoch {epoch}/{num_epochs}, Loss: {loss.item()}")
+        print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
 
-# Save the trained model
-torch.save(model.state_dict(), "lstm_publications_model.pth")
+# Forecast next 60 months
+model.eval()
+future_preds = []
+last_seq = torch.tensor(values[-time_steps:], dtype=torch.float32).unsqueeze(0).unsqueeze(-1)
 
-print("Training complete! Model saved as 'lstm_publications_model.pth'.")
+with torch.no_grad():
+    for _ in range(60):
+        next_val = model(last_seq)
+        future_preds.append(next_val.item())
+        last_seq = torch.cat((last_seq[:, 1:, :], next_val.unsqueeze(1)), dim=1)
+
+# Inverse transform to get actual predicted publication counts
+predicted_counts = scaler.inverse_transform(np.array(future_preds).reshape(-1, 1)).flatten()
+
+# Create date index for forecast
+last_date = monthly_counts["date"].iloc[-1]
+future_dates = pd.date_range(last_date + pd.offsets.MonthBegin(), periods=60, freq='MS')
+
+# Plot
+plt.figure(figsize=(14, 6))
+plt.plot(monthly_counts["date"], monthly_counts["count"], label="Historical")
+plt.plot(future_dates, predicted_counts, label="Forecast (Next 5 Years)", linestyle="--")
+plt.title("Forecast of Monthly Publications Using LSTM")
+plt.xlabel("Date")
+plt.ylabel("Publication Count")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
