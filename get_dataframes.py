@@ -66,15 +66,12 @@ def get_discipline_entries(discipline, csv_filepath):
     # Load the CSV file with schema
     df = pl.read_csv(csv_filepath, schema=schema)
 
-    # Get the relevant categories for the specified discipline
-    categories = discipline_categories[discipline]
 
-    # Filter the DataFrame based on the relevant categories
+    categories = discipline_categories[discipline]
     filtered_df = df.filter(
         pl.col("categories").str.contains("|".join(categories))
     )
 
-    # Display the first few rows for verification
     print(filtered_df.head())
 
     # Save filtered data to a new CSV file
@@ -85,15 +82,15 @@ def get_discipline_entries(discipline, csv_filepath):
 
 
 
-# Track the start time
+
 start_time = time.time()
 
 # Run the functions
-#JSON_to_CSV()
+
+JSON_to_CSV()
 for discipline in ["math","cs", "phys", "astro"]:
     get_discipline_entries(discipline, "complete_arxiv_data.csv")
 
-# Track the end time and print elapsed time
 end_time = time.time()
 print(f"\nCompleted in {(end_time - start_time) / 60:.2f} minutes.")
 
