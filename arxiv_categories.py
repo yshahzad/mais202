@@ -120,4 +120,3 @@ cs_categories = [
 #Physics
 # phys_categories = ['astro-ph', 'cond-mat', 'gr-qc', 'hep-ex', 'hep-lat', 'hep-ph', 
 #                           'hep-th', 'math-ph', 'nlin', 'nucl-ex', 'nucl-th', 'physics', 'quant-ph']
-
