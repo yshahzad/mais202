@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from config import NUM_AUTHORS_RECORDED, CATEGORY_LABELS
+from .config import NUM_AUTHORS_RECORDED, CATEGORY_LABELS
 
 
 #Tested and works
